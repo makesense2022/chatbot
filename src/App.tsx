@@ -1,10 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Bot, Send, Loader2 } from 'lucide-react';
+import { Bot, Send, Loader2, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
 interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
+}
+
+interface DeepseekModel {
+  id: string;
+  object: string;
+  created: number;
+  owned_by: string;
 }
 
 function App() {
@@ -17,6 +24,10 @@ function App() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [availableModels, setAvailableModels] = useState<DeepseekModel[]>([]);
+  const [selectedModel, setSelectedModel] = useState('deepseek-chat');
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -26,6 +37,42 @@ function App() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // 获取可用模型列表
+  const fetchAvailableModels = async () => {
+    setIsLoadingModels(true);
+    try {
+      const deepseekApiKey = import.meta.env.VITE_DEEPSEEK_API_KEY;
+      
+      if (!deepseekApiKey) {
+        throw new Error('缺少 Deepseek API 密钥配置');
+      }
+      
+      const response = await fetch('https://api.deepseek.com/models', {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${deepseekApiKey}`
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`请求失败: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      setAvailableModels(data.data || []);
+    } catch (error) {
+      console.error('获取模型列表失败:', error);
+    } finally {
+      setIsLoadingModels(false);
+    }
+  };
+
+  // 页面加载时获取模型列表
+  useEffect(() => {
+    fetchAvailableModels();
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,7 +103,7 @@ function App() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'deepseek-chat',
+          model: selectedModel,
           messages: messages.filter(msg => msg.role !== 'system').concat(newMessage),
           temperature: 0.7,
           max_tokens: 1000,
@@ -146,6 +193,61 @@ function App() {
         <div className="max-w-4xl mx-auto px-4 py-4 flex items-center gap-2">
           <Bot className="w-6 h-6 text-blue-600" />
           <h1 className="text-xl font-semibold text-gray-900">Deepseek 聊天助手</h1>
+          
+          <div className="relative ml-auto">
+            <button
+              onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
+              className="flex items-center gap-1 text-sm text-gray-700 bg-gray-100 px-3 py-1.5 rounded-full hover:bg-gray-200 focus:outline-none"
+              disabled={isLoadingModels}
+            >
+              <span>{selectedModel}</span>
+              {isModelDropdownOpen ? (
+                <ChevronUp className="w-4 h-4" />
+              ) : (
+                <ChevronDown className="w-4 h-4" />
+              )}
+            </button>
+            
+            {isModelDropdownOpen && (
+              <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg z-10 py-1 text-sm">
+                <div className="p-2 border-b flex justify-between items-center">
+                  <span className="font-medium text-gray-700">选择模型</span>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      fetchAvailableModels();
+                    }}
+                    className="text-blue-600 hover:text-blue-800"
+                    disabled={isLoadingModels}
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isLoadingModels ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+                <div className="max-h-60 overflow-y-auto">
+                  {availableModels.length > 0 ? (
+                    availableModels.map((model) => (
+                      <button
+                        key={model.id}
+                        className={`w-full text-left px-4 py-2 hover:bg-gray-100 ${
+                          selectedModel === model.id ? 'bg-blue-50 text-blue-600' : 'text-gray-700'
+                        }`}
+                        onClick={() => {
+                          setSelectedModel(model.id);
+                          setIsModelDropdownOpen(false);
+                        }}
+                      >
+                        {model.id}
+                      </button>
+                    ))
+                  ) : (
+                    <div className="px-4 py-2 text-gray-500">
+                      {isLoadingModels ? '加载中...' : '没有可用的模型'}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -155,6 +257,7 @@ function App() {
             <div className="text-center text-gray-500 mt-8">
               <Bot className="w-12 h-12 mx-auto mb-4 text-gray-400" />
               <p>开始与Deepseek聊天助手对话！</p>
+              <p className="mt-2 text-xs">当前使用模型: {selectedModel}</p>
             </div>
           ) : (
             <div className="space-y-4">
