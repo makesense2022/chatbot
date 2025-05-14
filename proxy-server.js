@@ -6,6 +6,11 @@ import axios from "axios";
 import * as cheerio from "cheerio";
 // 导入iconv-lite处理编码问题
 import iconv from "iconv-lite";
+// 导入dotenv，读取环境变量
+import dotenv from "dotenv";
+
+// 加载环境变量
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -635,8 +640,13 @@ class SerperEngine extends SearchEngine {
 
   async search(query, numResults = 10, fetchContent = false) {
     try {
-      // 使用预设的API密钥
-      const apiKey = "a0522c77dfe9999b47c8ab90bdca6d1702c2f8c5";
+      // 从环境变量获取API密钥
+      const apiKey = process.env.SERPER_API_KEY;
+
+      if (!apiKey) {
+        throw new Error("缺少Serper API密钥，请在.env文件中设置SERPER_API_KEY");
+      }
+
       console.log(`使用Serper搜索: "${query}"`);
 
       // 修改为使用search端点
@@ -743,9 +753,13 @@ class SerpApiEngine extends SearchEngine {
 
   async search(query, numResults = 10, fetchContent = false) {
     try {
-      // 使用预设的API密钥
-      const apiKey =
-        "007cb1a410f9898649bf019e8682ec85547b6f3b89aa724a1c02faa81dd68c9a";
+      // 从环境变量获取API密钥
+      const apiKey = process.env.SERPAPI_API_KEY;
+
+      if (!apiKey) {
+        throw new Error("缺少SerpAPI密钥，请在.env文件中设置SERPAPI_API_KEY");
+      }
+
       console.log(`使用SerpAPI搜索: "${query}"`);
 
       const response = await axios.get("https://serpapi.com/search", {
@@ -1124,7 +1138,7 @@ console.log(`
 多搜索引擎代理服务器使用说明:
 
 1. 安装依赖:
-   npm install express cors axios cheerio iconv-lite
+   npm install express cors axios cheerio iconv-lite dotenv
 
 2. 启动服务器:
    node proxy-server.js
@@ -1148,7 +1162,13 @@ console.log(`
    - 网站特殊处理: 为常见新闻网站(新浪、腾讯、网易等)提供更精准的内容提取
    - 深度爬取: 从列表页中识别和提取有价值的内容链接
 
-6. 在前端代码中使用以下URL:
+6. 环境变量配置:
+   在项目根目录创建.env文件，设置以下环境变量:
+   SERPER_API_KEY=您的Serper API密钥
+   SERPAPI_API_KEY=您的SerpAPI密钥
+   PORT=3001 (可选，默认为3001)
+
+7. 在前端代码中使用以下URL:
    http://localhost:3001/api/search?q=YOUR_QUERY
 
 注意: 此版本服务器集成了多个搜索引擎:
