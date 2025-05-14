@@ -108,6 +108,47 @@ async function fetchAndExtractContent(url, maxContentLength = 3000) {
     let mainContent = "";
     let articleTitle = $("title").text().trim();
 
+    // 添加列表页检测
+    const isListPage = detectListPage($);
+    if (isListPage) {
+      console.log(`检测到列表页: ${url}`);
+      // 尝试提取列表页中的主要内容链接
+      const contentLinks = extractContentLinks($, url);
+      if (contentLinks.length > 0) {
+        console.log(`从列表页提取到 ${contentLinks.length} 个内容链接`);
+        // 尝试爬取第一个内容链接
+        try {
+          const firstContentLink = contentLinks[0];
+          console.log(`爬取列表页中的内容链接: ${firstContentLink}`);
+          const contentResult = await fetchAndExtractContent(firstContentLink);
+          if (contentResult.success) {
+            return contentResult;
+          }
+        } catch (contentError) {
+          console.error(`爬取列表页内容链接失败: ${contentError.message}`);
+          // 继续处理列表页本身的内容
+        }
+      }
+    }
+
+    // 针对常见新闻网站的特殊处理
+    const domain = new URL(url).hostname;
+    const specialSiteHandler = getSpecialSiteHandler(domain);
+
+    if (specialSiteHandler) {
+      console.log(`使用特殊处理器处理网站: ${domain}`);
+      const specialContent = specialSiteHandler($, url);
+      if (specialContent && specialContent.content) {
+        return {
+          url,
+          title: specialContent.title || articleTitle,
+          content: specialContent.content,
+          publishDate: specialContent.publishDate || "",
+          success: true,
+        };
+      }
+    }
+
     // 针对新闻网站的特殊处理
     const isNewsPage = /news|article|post|blog|新闻|资讯|报道/.test(url);
 
@@ -264,13 +305,27 @@ async function fetchAndExtractContent(url, maxContentLength = 3000) {
       }
     }
 
+    // 评估内容质量
+    const contentQuality = assessContentQuality(mainContent);
+    if (contentQuality.score < 30) {
+      console.log(
+        `内容质量评分低: ${contentQuality.score}, 原因: ${contentQuality.reason}`
+      );
+      return {
+        url,
+        title: articleTitle,
+        content: `内容质量不佳，可能是列表页或不完整内容。评分: ${contentQuality.score}/100。`,
+        success: false,
+      };
+    }
+
     // 限制内容长度
     if (mainContent.length > maxContentLength) {
       mainContent = mainContent.substring(0, maxContentLength) + "...";
     }
 
     console.log(
-      `成功提取内容，长度: ${mainContent.length} 字符，标题: ${articleTitle}`
+      `成功提取内容，长度: ${mainContent.length} 字符，标题: ${articleTitle}, 质量评分: ${contentQuality.score}/100`
     );
     return {
       url,
@@ -288,6 +343,286 @@ async function fetchAndExtractContent(url, maxContentLength = 3000) {
       success: false,
     };
   }
+}
+
+// 检测是否是列表页
+function detectListPage($) {
+  // 检查是否有大量相似结构的链接
+  const linkPatterns = {};
+  let totalLinks = 0;
+
+  $("a").each((_, link) => {
+    const href = $(link).attr("href");
+    if (href && !href.startsWith("#") && !href.startsWith("javascript:")) {
+      totalLinks++;
+
+      try {
+        const urlObj = new URL(href, "http://example.com");
+        const pathParts = urlObj.pathname.split("/");
+        const pattern = pathParts.length > 1 ? pathParts[1] : "";
+
+        if (pattern) {
+          linkPatterns[pattern] = (linkPatterns[pattern] || 0) + 1;
+        }
+      } catch (e) {
+        // 忽略无效URL
+      }
+    }
+  });
+
+  // 检查是否有任何模式占据了大量链接
+  for (const pattern in linkPatterns) {
+    if (
+      linkPatterns[pattern] >= 5 &&
+      linkPatterns[pattern] / totalLinks > 0.2
+    ) {
+      return true;
+    }
+  }
+
+  // 检查是否包含列表页特征词
+  const bodyText = $("body").text().toLowerCase();
+  const listPageKeywords = [
+    "目录",
+    "索引",
+    "列表",
+    "分类",
+    "最新文章",
+    "相关阅读",
+    "热门文章",
+    "推荐阅读",
+  ];
+
+  for (const keyword of listPageKeywords) {
+    if (bodyText.includes(keyword)) {
+      return true;
+    }
+  }
+
+  // 检查是否有列表结构
+  if ($("ul li a, ol li a").length > 10) {
+    return true;
+  }
+
+  return false;
+}
+
+// 从列表页提取内容链接
+function extractContentLinks($, baseUrl) {
+  const links = [];
+  const seenUrls = new Set();
+
+  // 提取所有链接
+  $("a").each((_, link) => {
+    const href = $(link).attr("href");
+    if (!href || href.startsWith("#") || href.startsWith("javascript:")) return;
+
+    try {
+      // 规范化URL
+      let fullUrl = href;
+      if (!href.startsWith("http")) {
+        const base = new URL(baseUrl);
+        fullUrl = new URL(href, base.origin).toString();
+      }
+
+      // 过滤掉已经见过的URL和非内容URL
+      if (seenUrls.has(fullUrl)) return;
+      if (
+        /login|register|signup|signin|search|category|tag|author|about|contact|feed|rss/i.test(
+          fullUrl
+        )
+      )
+        return;
+
+      const linkText = $(link).text().trim();
+      // 添加看起来像文章的链接
+      if (linkText.length > 15 && linkText.length < 100) {
+        seenUrls.add(fullUrl);
+        links.push(fullUrl);
+      }
+    } catch (e) {
+      // 忽略无效URL
+    }
+  });
+
+  return links;
+}
+
+// 评估内容质量
+function assessContentQuality(content) {
+  if (!content) {
+    return { score: 0, reason: "内容为空" };
+  }
+
+  // 初始分数
+  let score = 50;
+  let reason = "";
+
+  // 内容长度评分
+  if (content.length < 100) {
+    score -= 30;
+    reason += "内容过短; ";
+  } else if (content.length > 500) {
+    score += 20;
+  }
+
+  // 段落评分
+  const paragraphs = content.split(/\n\n+/);
+  if (paragraphs.length < 3) {
+    score -= 10;
+    reason += "段落过少; ";
+  } else if (paragraphs.length > 5) {
+    score += 10;
+  }
+
+  // 内容多样性评分
+  const wordSet = new Set(content.split(/\s+/).filter((w) => w.length > 3));
+  const uniqueWordRatio = wordSet.size / content.split(/\s+/).length;
+
+  if (uniqueWordRatio < 0.3) {
+    score -= 20;
+    reason += "词汇多样性低; ";
+  } else if (uniqueWordRatio > 0.5) {
+    score += 10;
+  }
+
+  // 检查是否有导航相关的常见词汇
+  const navigationTerms = [
+    "首页",
+    "导航",
+    "菜单",
+    "注册",
+    "登录",
+    "搜索",
+    "分类",
+    "标签",
+    "上一页",
+    "下一页",
+  ];
+  let navigationTermCount = 0;
+
+  for (const term of navigationTerms) {
+    if (content.includes(term)) {
+      navigationTermCount++;
+    }
+  }
+
+  if (navigationTermCount > 3) {
+    score -= 15;
+    reason += "包含多个导航元素; ";
+  }
+
+  // 返回最终评分，限制在0-100之间
+  return {
+    score: Math.max(0, Math.min(100, score)),
+    reason: reason || "内容质量正常",
+  };
+}
+
+// 为常见新闻网站提供特殊处理
+function getSpecialSiteHandler(domain) {
+  const handlers = {
+    // 新浪
+    "sina.com.cn": ($, url) => {
+      // 新浪新闻特殊处理
+      const articleBody = $("#artibody, .article-body");
+      if (articleBody.length > 0) {
+        let content = "";
+        articleBody.find("p").each((_, p) => {
+          const text = $(p).text().trim();
+          if (text && text.length > 10) content += text + "\n\n";
+        });
+
+        const title = $("h1.main-title").text().trim();
+        const date = $(".date").text().trim();
+
+        return { title, content, publishDate: date };
+      }
+      return null;
+    },
+
+    // 腾讯
+    "qq.com": ($, url) => {
+      const content = $("#ArticleContent, .content-article").text().trim();
+      const title = $(".LEFT h1, .hd h1").text().trim();
+      const date = $(".a_time, .article-time").text().trim();
+
+      if (content && content.length > 100) {
+        return { title, content, publishDate: date };
+      }
+      return null;
+    },
+
+    // 网易
+    "163.com": ($, url) => {
+      const content = $("#endText, .post_body").text().trim();
+      const title = $(".post_title h1, .end-title h1").text().trim();
+      const date = $(".post_time, .post-time").text().trim();
+
+      if (content && content.length > 100) {
+        return { title, content, publishDate: date };
+      }
+      return null;
+    },
+
+    // 百度百家号
+    "baijiahao.baidu.com": ($, url) => {
+      const content = $(".article-content").text().trim();
+      const title = $(".article-title").text().trim();
+      const date = $(".article-source span").first().text().trim();
+
+      if (content && content.length > 100) {
+        return { title, content, publishDate: date };
+      }
+      return null;
+    },
+
+    // 搜狐
+    "sohu.com": ($, url) => {
+      const content = $(".article, #articleContent").text().trim();
+      const title = $(".text-title h1, .article-title").text().trim();
+      const date = $(".article-info .time, .time-source").text().trim();
+
+      if (content && content.length > 100) {
+        return { title, content, publishDate: date };
+      }
+      return null;
+    },
+
+    // 凤凰网
+    "ifeng.com": ($, url) => {
+      const content = $("#main_content, .main_content").text().trim();
+      const title = $(".yc_tit h1, .headline-title").text().trim();
+      const date = $(".yc_tit .ss_none, .updated").text().trim();
+
+      if (content && content.length > 100) {
+        return { title, content, publishDate: date };
+      }
+      return null;
+    },
+
+    // 中国新闻网
+    "chinanews.com": ($, url) => {
+      const content = $(".left_zw").text().trim();
+      const title = $(".content_title").text().trim();
+      const date = $(".left-t").text().trim();
+
+      if (content && content.length > 100) {
+        return { title, content, publishDate: date };
+      }
+      return null;
+    },
+  };
+
+  // 检查完整域名
+  if (handlers[domain]) return handlers[domain];
+
+  // 检查部分匹配的域名
+  for (const key in handlers) {
+    if (domain.includes(key)) return handlers[key];
+  }
+
+  return null;
 }
 
 // Serper.dev API 实现
@@ -337,7 +672,7 @@ class SerperEngine extends SearchEngine {
         );
 
         for (const item of response.data.organic) {
-          // 创建基本搜索结果并确保link字段映射到url属性
+          // 确保link字段映射到url属性
           const searchItem = new SearchItem(
             item.title,
             item.link,
@@ -807,7 +1142,13 @@ console.log(`
    - engine: 可选，指定搜索引擎，可选值：serper, serpapi
    - fetch_content: 可选，是否爬取搜索结果链接的详细内容，值为 true 时启用
 
-5. 在前端代码中使用以下URL:
+5. 增强功能:
+   - 列表页检测: 自动识别搜索结果中的列表页，并尝试提取实际内容
+   - 内容质量评估: 评估爬取内容的质量，过滤低质量内容
+   - 网站特殊处理: 为常见新闻网站(新浪、腾讯、网易等)提供更精准的内容提取
+   - 深度爬取: 从列表页中识别和提取有价值的内容链接
+
+6. 在前端代码中使用以下URL:
    http://localhost:3001/api/search?q=YOUR_QUERY
 
 注意: 此版本服务器集成了多个搜索引擎:
