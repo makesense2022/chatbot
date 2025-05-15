@@ -1,11 +1,20 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Bot, Send, Loader2, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
+import { Bot, Send, Loader2, ChevronDown, ChevronUp, RefreshCw, Plus, Trash2, Menu, X, MessageSquare } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
 interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   thinking?: string;
+}
+
+// 定义聊天记录接口
+interface ChatSession {
+  id: string;
+  title: string;
+  messages: Message[];
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 interface DeepseekModel {
@@ -46,6 +55,11 @@ function App() {
       content: '你是一个知识问答助手。请尽可能回答用户的问题。如果你不确定答案，请诚实地说你不知道。'
     }
   ]);
+  // 添加历史会话管理状态
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string>('');
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
+  
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -129,6 +143,165 @@ function App() {
       scrollToBottom();
     }
   }, [isStreaming]);
+
+  // 会话管理功能
+  // 从本地存储加载会话
+  useEffect(() => {
+    const savedSessions = localStorage.getItem('chatSessions');
+    if (savedSessions) {
+      try {
+        const sessions = JSON.parse(savedSessions).map((session: ChatSession) => ({
+          ...session,
+          createdAt: new Date(session.createdAt),
+          updatedAt: new Date(session.updatedAt)
+        }));
+        setChatSessions(sessions);
+        
+        // 如果有当前会话ID，载入该会话
+        const lastSessionId = localStorage.getItem('currentSessionId');
+        if (lastSessionId) {
+          const foundSession = sessions.find((s: ChatSession) => s.id === lastSessionId);
+          if (foundSession) {
+            setCurrentSessionId(lastSessionId);
+            setMessages(foundSession.messages);
+          } else if (sessions.length > 0) {
+            // 如果找不到上次的会话但有其他会话，载入最新的一个
+            const latestSession = sessions.sort((a: ChatSession, b: ChatSession) => 
+              b.updatedAt.getTime() - a.updatedAt.getTime()
+            )[0];
+            setCurrentSessionId(latestSession.id);
+            setMessages(latestSession.messages);
+          } else {
+            // 如果没有会话，创建一个新的
+            createNewChat();
+          }
+        } else if (sessions.length > 0) {
+          // 如果没有lastSessionId但有会话，载入最新的
+          const latestSession = sessions.sort((a: ChatSession, b: ChatSession) => 
+            b.updatedAt.getTime() - a.updatedAt.getTime()
+          )[0];
+          setCurrentSessionId(latestSession.id);
+          setMessages(latestSession.messages);
+        } else {
+          // 如果没有会话，创建一个新的
+          createNewChat();
+        }
+      } catch (error) {
+        console.error('加载会话失败:', error);
+        createNewChat();
+      }
+    } else {
+      // 如果没有保存的会话，创建一个新的
+      createNewChat();
+    }
+  }, []);
+
+  // 保存当前会话到本地存储
+  useEffect(() => {
+    if (currentSessionId && messages.length > 1) {
+      // 更新当前会话
+      setChatSessions(prev => {
+        const updatedSessions = prev.map(session => {
+          if (session.id === currentSessionId) {
+            // 更新标题 - 从第一条用户消息获取
+            const firstUserMessage = messages.find(m => m.role === 'user');
+            const title = firstUserMessage 
+              ? truncateTitle(firstUserMessage.content) 
+              : '新对话';
+            
+            return {
+              ...session,
+              title,
+              messages,
+              updatedAt: new Date()
+            };
+          }
+          return session;
+        });
+        
+        // 保存到本地存储
+        localStorage.setItem('chatSessions', JSON.stringify(updatedSessions));
+        localStorage.setItem('currentSessionId', currentSessionId);
+        
+        return updatedSessions;
+      });
+    }
+  }, [messages, currentSessionId]);
+
+  // 创建新的聊天会话
+  const createNewChat = () => {
+    const newId = `session-${Date.now()}`;
+    const newSession: ChatSession = {
+      id: newId,
+      title: '新对话',
+      messages: [
+        {
+          role: 'system',
+          content: '你是一个知识问答助手。请尽可能回答用户的问题。如果你不确定答案，请诚实地说你不知道。'
+        }
+      ],
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    setChatSessions(prev => {
+      const updated = [...prev, newSession];
+      localStorage.setItem('chatSessions', JSON.stringify(updated));
+      return updated;
+    });
+    
+    setCurrentSessionId(newId);
+    setMessages(newSession.messages);
+    setInput('');
+  };
+
+  // 切换到指定的聊天会话
+  const switchToChat = (sessionId: string) => {
+    const session = chatSessions.find(s => s.id === sessionId);
+    if (session) {
+      setCurrentSessionId(sessionId);
+      setMessages(session.messages);
+      localStorage.setItem('currentSessionId', sessionId);
+    }
+  };
+
+  // 删除聊天会话
+  const deleteChat = (sessionId: string, event?: React.MouseEvent) => {
+    if (event) {
+      event.stopPropagation();
+    }
+    
+    setChatSessions(prev => {
+      const updated = prev.filter(s => s.id !== sessionId);
+      localStorage.setItem('chatSessions', JSON.stringify(updated));
+      
+      // 如果删除的是当前会话，切换到最新的会话或创建一个新的
+      if (sessionId === currentSessionId) {
+        if (updated.length > 0) {
+          const latest = updated.sort((a, b) => 
+            b.updatedAt.getTime() - a.updatedAt.getTime()
+          )[0];
+          setCurrentSessionId(latest.id);
+          setMessages(latest.messages);
+          localStorage.setItem('currentSessionId', latest.id);
+        } else {
+          // 如果没有会话了，创建一个新的
+          createNewChat();
+        }
+      }
+      
+      return updated;
+    });
+  };
+
+  // 工具函数：截断标题
+  const truncateTitle = (text: string, maxLength = 30) => {
+    // 移除可能的"搜索新闻:"前缀
+    const cleanText = text.replace(/^搜索新闻:\s*/, '');
+    
+    if (cleanText.length <= maxLength) return cleanText;
+    return cleanText.substring(0, maxLength) + '...';
+  };
 
   // 获取可用模型列表
   const fetchAvailableModels = async () => {
@@ -385,6 +558,14 @@ ${content}
   // 处理搜索并总结新闻
   const handleSearchAndSummarize = async (searchQuery: string) => {
     setIsLoading(true);
+    
+    // 如果没有当前会话ID或者没有会话，先创建一个新的
+    if (!currentSessionId || chatSessions.length === 0) {
+      createNewChat();
+      // 由于createNewChat是异步更新状态，等待下一个渲染周期
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    
     try {
       // 添加用户搜索消息
       const userMessage: Message = { 
@@ -470,6 +651,13 @@ ${content}
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
+
+    // 如果没有当前会话ID或者没有会话，先创建一个新的
+    if (!currentSessionId || chatSessions.length === 0) {
+      createNewChat();
+      // 由于createNewChat是异步更新状态，等待下一个渲染周期
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
 
     const inputQuery = input.trim();
     setInput('');
@@ -651,185 +839,284 @@ ${content}
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col">
-      <header className="bg-white shadow-sm">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center gap-2">
-          <Bot className="w-6 h-6 text-blue-600" />
-          <h1 className="text-xl font-semibold text-gray-900">Deepseek 聊天助手</h1>
-          
-          <div className="relative ml-auto flex items-center gap-2">
-            <button
-              onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
-              className="flex items-center gap-1 text-sm text-gray-700 bg-gray-100 px-3 py-1.5 rounded-full hover:bg-gray-200 focus:outline-none"
-              disabled={isLoadingModels}
+    <div className="min-h-screen bg-gray-100 flex">
+      {/* 移动设备上的覆盖层 */}
+      {isSidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 z-20 md:hidden" 
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+      
+      {/* 新增侧边栏 */}
+      <div className={`fixed inset-y-0 left-0 z-30 w-72 bg-white shadow-lg transform transition-transform duration-300 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static md:min-h-screen`}>
+        <div className="flex flex-col h-full">
+          <div className="p-4 border-b flex items-center justify-between">
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <MessageSquare className="w-5 h-5 text-blue-600" />
+              <span>聊天记录</span>
+            </h2>
+            <button 
+              onClick={() => setIsSidebarOpen(false)}
+              className="p-1 text-gray-500 hover:text-gray-700 md:hidden"
             >
-              <span>{selectedModel}</span>
-              {isModelDropdownOpen ? (
-                <ChevronUp className="w-4 h-4" />
-              ) : (
-                <ChevronDown className="w-4 h-4" />
-              )}
+              <X className="w-5 h-5" />
             </button>
-            
-            {isModelDropdownOpen && (
-              <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg z-10 py-1 text-sm">
-                <div className="p-2 border-b flex justify-between items-center">
-                  <span className="font-medium text-gray-700">选择模型</span>
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      fetchAvailableModels();
-                    }}
-                    className="text-blue-600 hover:text-blue-800"
-                    disabled={isLoadingModels}
-                  >
-                    <RefreshCw className={`w-4 h-4 ${isLoadingModels ? 'animate-spin' : ''}`} />
-                  </button>
-                </div>
-                <div className="max-h-60 overflow-y-auto">
-                  {availableModels.length > 0 ? (
-                    availableModels.map((model) => (
+          </div>
+          
+          <div className="p-2">
+            <button
+              onClick={createNewChat}
+              className="w-full flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              <span>新建对话</span>
+            </button>
+          </div>
+          
+          <div className="flex-1 overflow-y-auto p-2">
+            {chatSessions.length === 0 ? (
+              <div className="text-center text-gray-500 p-4">
+                <p>没有对话记录</p>
+                <p className="text-sm mt-1">点击"新建对话"开始聊天</p>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {chatSessions
+                  .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+                  .map(session => (
+                    <div
+                      key={session.id}
+                      onClick={() => switchToChat(session.id)}
+                      className={`p-3 rounded-lg cursor-pointer flex items-center group ${
+                        session.id === currentSessionId
+                          ? 'bg-blue-100 text-blue-800'
+                          : 'hover:bg-gray-100'
+                      }`}
+                    >
+                      <div className="flex-1 truncate">
+                        <div className="font-medium truncate">{session.title}</div>
+                        <div className="text-xs text-gray-500 truncate">
+                          {new Date(session.updatedAt).toLocaleString('zh-CN', {
+                            month: 'numeric',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </div>
+                      </div>
                       <button
-                        key={model.id}
-                        className={`w-full text-left px-4 py-2 hover:bg-gray-100 ${
-                          selectedModel === model.id ? 'bg-blue-50 text-blue-600' : 'text-gray-700'
-                        }`}
-                        onClick={() => {
-                          setSelectedModel(model.id);
-                          setIsModelDropdownOpen(false);
-                        }}
+                        onClick={(e) => deleteChat(session.id, e)}
+                        className="p-1 text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="删除对话"
                       >
-                        {model.id}
+                        <Trash2 className="w-4 h-4" />
                       </button>
-                    ))
-                  ) : (
-                    <div className="px-4 py-2 text-gray-500">
-                      {isLoadingModels ? '加载中...' : '没有可用的模型'}
                     </div>
-                  )}
-                </div>
+                  ))}
               </div>
             )}
           </div>
         </div>
-      </header>
-
-      <main className="flex-1 max-w-4xl w-full mx-auto p-4 flex flex-col gap-4">
-        <div 
-          ref={messageContainerRef}
-          className="bg-white rounded-lg shadow-sm p-4 flex-1 overflow-y-auto max-h-[calc(100vh-16rem)]"
-        >
-          {messages.length <= 1 ? (
-            <div className="text-center text-gray-500 mt-8">
-              <Bot className="w-12 h-12 mx-auto mb-4 text-gray-400" />
-              <p>开始与Deepseek聊天助手对话！</p>
-              <p className="mt-2 text-xs">当前使用模型: {selectedModel}</p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {messages.filter(m => m.role !== 'system').map((message, index) => (
-                <div
-                  key={index}
-                  className={`flex ${
-                    message.role === 'user' ? 'justify-end' : 'justify-start'
-                  }`}
-                >
-                  <div
-                    className={`max-w-[80%] rounded-lg p-4 ${
-                      message.role === 'user'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-100 text-gray-900'
-                    }`}
-                  >
-                    {/* 添加思考内容部分 */}
-                    {message.thinking && (
-                      <div className="mb-3">
+      </div>
+      
+      {/* 主要内容区域 */}
+      <div className="flex-1 flex flex-col min-h-screen md:ml-0">
+        <header className="bg-white shadow-sm">
+          <div className="max-w-4xl mx-auto px-4 py-4 flex items-center gap-2">
+            <button
+              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              className="md:hidden p-1 rounded-md hover:bg-gray-100"
+            >
+              {isSidebarOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+            </button>
+            
+            <Bot className="w-6 h-6 text-blue-600" />
+            <h1 className="text-xl font-semibold text-gray-900">Deepseek 聊天助手</h1>
+            
+            <div className="relative ml-auto flex items-center gap-2">
+              <button
+                onClick={createNewChat}
+                className="flex items-center gap-1 text-sm text-gray-700 bg-gray-100 px-3 py-1.5 rounded-full hover:bg-gray-200 focus:outline-none"
+                title="新建对话"
+              >
+                <Plus className="w-4 h-4" />
+                <span>新对话</span>
+              </button>
+              
+              <button
+                onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
+                className="flex items-center gap-1 text-sm text-gray-700 bg-gray-100 px-3 py-1.5 rounded-full hover:bg-gray-200 focus:outline-none"
+                disabled={isLoadingModels}
+              >
+                <span>{selectedModel}</span>
+                {isModelDropdownOpen ? (
+                  <ChevronUp className="w-4 h-4" />
+                ) : (
+                  <ChevronDown className="w-4 h-4" />
+                )}
+              </button>
+              
+              {isModelDropdownOpen && (
+                <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg z-10 py-1 text-sm">
+                  <div className="p-2 border-b flex justify-between items-center">
+                    <span className="font-medium text-gray-700">选择模型</span>
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        fetchAvailableModels();
+                      }}
+                      className="text-blue-600 hover:text-blue-800"
+                      disabled={isLoadingModels}
+                    >
+                      <RefreshCw className={`w-4 h-4 ${isLoadingModels ? 'animate-spin' : ''}`} />
+                    </button>
+                  </div>
+                  <div className="max-h-60 overflow-y-auto">
+                    {availableModels.length > 0 ? (
+                      availableModels.map((model) => (
                         <button
-                          onClick={() => toggleThinking(index)}
-                          className="flex items-center text-xs text-gray-500 hover:text-gray-700 mb-1 focus:outline-none"
+                          key={model.id}
+                          className={`w-full text-left px-4 py-2 hover:bg-gray-100 ${
+                            selectedModel === model.id ? 'bg-blue-50 text-blue-600' : 'text-gray-700'
+                          }`}
+                          onClick={() => {
+                            setSelectedModel(model.id);
+                            setIsModelDropdownOpen(false);
+                          }}
                         >
-                          {collapsedThinking[index] ? (
-                            <ChevronDown className="w-3 h-3 mr-1" />
-                          ) : (
-                            <ChevronUp className="w-3 h-3 mr-1" />
-                          )}
-                          <span>思考过程 {collapsedThinking[index] ? '(展开)' : '(收起)'}</span>
+                          {model.id}
                         </button>
-                        
-                        {!collapsedThinking[index] && (
-                          <div className="p-2 bg-gray-200 rounded text-sm text-gray-700 whitespace-pre-wrap font-mono">
-                            {message.thinking}
-                          </div>
-                        )}
-                        
-                        <div className="border-t border-gray-300 my-2"></div>
+                      ))
+                    ) : (
+                      <div className="px-4 py-2 text-gray-500">
+                        {isLoadingModels ? '加载中...' : '没有可用的模型'}
                       </div>
-                    )}
-                    
-                    <ReactMarkdown>{message.content}</ReactMarkdown>
-                    {message.role === 'assistant' && index === messages.length - 1 && isStreaming && (
-                      <span className="inline-block w-2 h-4 ml-1 bg-gray-600 animate-pulse"></span>
                     )}
                   </div>
                 </div>
-              ))}
-              <div ref={messagesEndRef} />
-            </div>
-          )}
-        </div>
-
-        {/* 添加回到底部的按钮 */}
-        {userHasScrolled && isStreaming && (
-          <button
-            onClick={() => {
-              setAutoScrollEnabled(true);
-              setUserHasScrolled(false);
-              scrollToBottom();
-            }}
-            className="fixed bottom-24 right-8 bg-blue-600 text-white rounded-full p-2 shadow-lg hover:bg-blue-700"
-            title="回到最新消息"
-          >
-            <ChevronDown className="w-5 h-5" />
-          </button>
-        )}
-
-        <div className="bg-white rounded-lg shadow-sm p-4">
-          <form onSubmit={handleSubmit} className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setIsSearchMode(!isSearchMode)}
-              className={`flex items-center justify-center px-3 h-10 rounded-lg ${
-                isSearchMode 
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-              } transition-colors whitespace-nowrap`}
-              title={isSearchMode ? '当前为网络搜索模式' : '切换到网络搜索模式'}
-            >
-              网络搜索
-            </button>
-            
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={isSearchMode ? "输入搜索内容..." : "输入您的问题..."}
-              className="flex-1 rounded-lg border border-gray-300 px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              disabled={isLoading}
-            />
-            <button
-              type="submit"
-              disabled={isLoading || !input.trim()}
-              className="flex items-center justify-center w-10 h-10 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 disabled:cursor-not-allowed transition-colors"
-            >
-              {isLoading ? (
-                <Loader2 className="w-5 h-5 text-white animate-spin" />
-              ) : (
-                <Send className="w-5 h-5 text-white" />
               )}
+            </div>
+          </div>
+        </header>
+
+        <main className="flex-1 max-w-4xl w-full mx-auto p-4 flex flex-col gap-4">
+          <div 
+            ref={messageContainerRef}
+            className="bg-white rounded-lg shadow-sm p-4 flex-1 overflow-y-auto max-h-[calc(100vh-16rem)]"
+          >
+            {messages.length <= 1 ? (
+              <div className="text-center text-gray-500 mt-8">
+                <Bot className="w-12 h-12 mx-auto mb-4 text-gray-400" />
+                <p>开始与Deepseek聊天助手对话！</p>
+                <p className="mt-2 text-xs">当前使用模型: {selectedModel}</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {messages.filter(m => m.role !== 'system').map((message, index) => (
+                  <div
+                    key={index}
+                    className={`flex ${
+                      message.role === 'user' ? 'justify-end' : 'justify-start'
+                    }`}
+                  >
+                    <div
+                      className={`max-w-[80%] rounded-lg p-4 ${
+                        message.role === 'user'
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-100 text-gray-900'
+                      }`}
+                    >
+                      {/* 添加思考内容部分 */}
+                      {message.thinking && (
+                        <div className="mb-3">
+                          <button
+                            onClick={() => toggleThinking(index)}
+                            className="flex items-center text-xs text-gray-500 hover:text-gray-700 mb-1 focus:outline-none"
+                          >
+                            {collapsedThinking[index] ? (
+                              <ChevronDown className="w-3 h-3 mr-1" />
+                            ) : (
+                              <ChevronUp className="w-3 h-3 mr-1" />
+                            )}
+                            <span>思考过程 {collapsedThinking[index] ? '(展开)' : '(收起)'}</span>
+                          </button>
+                          
+                          {!collapsedThinking[index] && (
+                            <div className="p-2 bg-gray-200 rounded text-sm text-gray-700 whitespace-pre-wrap font-mono">
+                              {message.thinking}
+                            </div>
+                          )}
+                          
+                          <div className="border-t border-gray-300 my-2"></div>
+                        </div>
+                      )}
+                      
+                      <ReactMarkdown>{message.content}</ReactMarkdown>
+                      {message.role === 'assistant' && index === messages.length - 1 && isStreaming && (
+                        <span className="inline-block w-2 h-4 ml-1 bg-gray-600 animate-pulse"></span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                <div ref={messagesEndRef} />
+              </div>
+            )}
+          </div>
+
+          {/* 添加回到底部的按钮 */}
+          {userHasScrolled && isStreaming && (
+            <button
+              onClick={() => {
+                setAutoScrollEnabled(true);
+                setUserHasScrolled(false);
+                scrollToBottom();
+              }}
+              className="fixed bottom-24 right-8 bg-blue-600 text-white rounded-full p-2 shadow-lg hover:bg-blue-700"
+              title="回到最新消息"
+            >
+              <ChevronDown className="w-5 h-5" />
             </button>
-          </form>
-        </div>
-      </main>
+          )}
+
+          <div className="bg-white rounded-lg shadow-sm p-4">
+            <form onSubmit={handleSubmit} className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setIsSearchMode(!isSearchMode)}
+                className={`flex items-center justify-center px-3 h-10 rounded-lg ${
+                  isSearchMode 
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                } transition-colors whitespace-nowrap`}
+                title={isSearchMode ? '当前为网络搜索模式' : '切换到网络搜索模式'}
+              >
+                网络搜索
+              </button>
+              
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder={isSearchMode ? "输入搜索内容..." : "输入您的问题..."}
+                className="flex-1 rounded-lg border border-gray-300 px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={isLoading}
+              />
+              <button
+                type="submit"
+                disabled={isLoading || !input.trim()}
+                className="flex items-center justify-center w-10 h-10 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 disabled:cursor-not-allowed transition-colors"
+              >
+                {isLoading ? (
+                  <Loader2 className="w-5 h-5 text-white animate-spin" />
+                ) : (
+                  <Send className="w-5 h-5 text-white" />
+                )}
+              </button>
+            </form>
+          </div>
+        </main>
+      </div>
     </div>
   );
 }
