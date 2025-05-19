@@ -57,6 +57,7 @@ function App() {
   ]);
   // 添加历史会话管理状态
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  const [sortedSessions, setSortedSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>('');
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
   
@@ -144,6 +145,15 @@ function App() {
     }
   }, [isStreaming]);
 
+  // 当chatSessions变化时更新排序后的列表
+  useEffect(() => {
+    // 创建一个副本并排序
+    const sorted = [...chatSessions].sort((a, b) => 
+      b.updatedAt.getTime() - a.updatedAt.getTime()
+    );
+    setSortedSessions(sorted);
+  }, [chatSessions]);
+
   // 会话管理功能
   // 从本地存储加载会话
   useEffect(() => {
@@ -201,6 +211,13 @@ function App() {
     if (currentSessionId && messages.length > 1) {
       // 更新当前会话
       setChatSessions(prev => {
+        const currentSession = prev.find(session => session.id === currentSessionId);
+        
+        // 检查消息是否有实际变化（排除了单纯的会话切换）
+        const hasMessagesChanged = !currentSession || 
+          currentSession.messages.length !== messages.length || 
+          JSON.stringify(currentSession.messages) !== JSON.stringify(messages);
+        
         const updatedSessions = prev.map(session => {
           if (session.id === currentSessionId) {
             // 更新标题 - 从第一条用户消息获取
@@ -213,7 +230,8 @@ function App() {
               ...session,
               title,
               messages,
-              updatedAt: new Date()
+              // 只有当消息实际变化时才更新updatedAt时间
+              updatedAt: hasMessagesChanged ? new Date() : session.updatedAt
             };
           }
           return session;
@@ -262,6 +280,7 @@ function App() {
       setCurrentSessionId(sessionId);
       setMessages(session.messages);
       localStorage.setItem('currentSessionId', sessionId);
+      // 不更新会话的updatedAt时间，避免列表重排序
     }
   };
 
@@ -882,38 +901,36 @@ ${content}
               </div>
             ) : (
               <div className="space-y-1">
-                {chatSessions
-                  .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
-                  .map(session => (
-                    <div
-                      key={session.id}
-                      onClick={() => switchToChat(session.id)}
-                      className={`p-3 rounded-lg cursor-pointer flex items-center group ${
-                        session.id === currentSessionId
-                          ? 'bg-blue-100 text-blue-800'
-                          : 'hover:bg-gray-100'
-                      }`}
-                    >
-                      <div className="flex-1 truncate">
-                        <div className="font-medium truncate">{session.title}</div>
-                        <div className="text-xs text-gray-500 truncate">
-                          {new Date(session.updatedAt).toLocaleString('zh-CN', {
-                            month: 'numeric',
-                            day: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          })}
-                        </div>
+                {sortedSessions.map(session => (
+                  <div
+                    key={session.id}
+                    onClick={() => switchToChat(session.id)}
+                    className={`p-3 rounded-lg cursor-pointer flex items-center group ${
+                      session.id === currentSessionId
+                        ? 'bg-blue-100 text-blue-800'
+                        : 'hover:bg-gray-100'
+                    }`}
+                  >
+                    <div className="flex-1 truncate">
+                      <div className="font-medium truncate">{session.title}</div>
+                      <div className="text-xs text-gray-500 truncate">
+                        {new Date(session.updatedAt).toLocaleString('zh-CN', {
+                          month: 'numeric',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
                       </div>
-                      <button
-                        onClick={(e) => deleteChat(session.id, e)}
-                        className="p-1 text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
-                        title="删除对话"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
                     </div>
-                  ))}
+                    <button
+                      onClick={(e) => deleteChat(session.id, e)}
+                      className="p-1 text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="删除对话"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
           </div>
